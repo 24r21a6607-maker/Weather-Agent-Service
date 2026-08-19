@@ -1,4 +1,3 @@
-
 import os
 import requests
 
@@ -32,7 +31,7 @@ def get_current_weather(city: str) -> str:
         geo_res = requests.get(geo_url, timeout=10).json()
 
         if not geo_res.get("results"):
-            return f"City '{city}' not found."
+            return f"City '{city}' not found in Open-Meteo database. Try looking up the nearest major city (e.g., Hyderabad)."
 
         location = geo_res["results"][0]
         lat, lon = location["latitude"], location["longitude"]
@@ -60,31 +59,31 @@ def recommend_clothing(temperature_celsius: float) -> str:
 
 tools = [get_current_weather, recommend_clothing]
 
+# Updated prompt to handle locality fallbacks automatically
 weather_agent = create_react_agent(
     model=llm,
     tools=tools,
-    prompt="You are a helpful Weather and Outfit Advisory Agent."
+    prompt=(
+        "You are a helpful Weather and Outfit Advisory Agent. "
+        "When checking weather for small towns or local areas that might not exist in standard APIs, "
+        "search for the primary major metropolitan city nearby (for example, use Hyderabad for Gandimaisamma)."
+    )
 )
 
-class WeatherAgentInput(BaseModel):
-    city: str = Field(..., description="Target city name")
-    planned_activity: str = Field(default="Sightseeing", description="Planned activity")
-
-def run_weather_agent(payload: WeatherAgentInput) -> dict:
-    query = f"Check the weather in {payload.city} and suggest what to wear for {payload.planned_activity}."
-    result = weather_agent.invoke({"messages": [HumanMessage(content=query)]})
-
-    final_text = "No response."
+def process_query(user_input: str) -> str:
+    """Handles raw user string inputs directly from LangServe Playground."""
+    result = weather_agent.invoke({"messages": [HumanMessage(content=user_input)]})
+    
     for msg in reversed(result.get("messages", [])):
         if msg.__class__.__name__ == "AIMessage" and getattr(msg, "content", ""):
-            final_text = msg.content
-            break
-
-    return {"city": payload.city, "activity": payload.planned_activity, "report": final_text}
+            return msg.content
+            
+    return "No response generated."
 
 app = FastAPI(title="Weather Advisory AI Agent")
 
-add_routes(app, RunnableLambda(run_weather_agent), path="/weather-agent")
+# Expose as a direct string-to-string runnable for LangServe UI compatibility
+add_routes(app, RunnableLambda(process_query), path="/weather-agent")
 
 if __name__ == "__main__":
     import uvicorn
