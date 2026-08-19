@@ -12,14 +12,14 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import create_react_agent
 from langserve import add_routes
 
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+GOOGLE_APIKEY = os.environ.get("GOOGLE_APIKEY")
 
-if not GOOGLE_API_KEY:
+if not GOOGLE_APIKEY:
     raise RuntimeError("GOOGLE_API_KEY environment variable is missing.")
 
 llm = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash",
-    google_api_key=GOOGLE_API_KEY,
+    model="gemini-2.5-flash",
+    google_apikey=GOOGLE_APIKEY,
     temperature=0.3,
 )
 
