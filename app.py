@@ -1,135 +1,158 @@
-import os
-import uvicorn
+from flask import Flask, request, jsonify, render_template_string
 import requests
-import json
-from pydantic import BaseModel, Field
-from fastapi import FastAPI
-from langserve import add_routes
 
-from langchain_core.tools import tool
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.runnables import RunnableLambda
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import AgentExecutor, create_tool_calling_agent
+app = Flask(__name__)
 
-# --- 1. Tools Definition ---
-@tool
-def search_movies(genre: str) -> str:
-    """Search for Indian movies by genre."""
-    movies = {
-        "sci-fi": "Cargo, 2.0, Mr. India",
-        "comedy": "3 Idiots, Hera Pheri, Munna Bhai M.B.B.S.",
-        "action": "RRR, Vikram, Baahubali",
+GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
+WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
+
+# Weather codes -> human readable description (Open-Meteo WMO codes)
+WEATHER_CODES = {
+    0: "Clear sky",
+    1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+    45: "Fog", 48: "Depositing rime fog",
+    51: "Light drizzle", 53: "Moderate drizzle", 55: "Dense drizzle",
+    56: "Light freezing drizzle", 57: "Dense freezing drizzle",
+    61: "Slight rain", 63: "Moderate rain", 65: "Heavy rain",
+    66: "Light freezing rain", 67: "Heavy freezing rain",
+    71: "Slight snow fall", 73: "Moderate snow fall", 75: "Heavy snow fall",
+    77: "Snow grains",
+    80: "Slight rain showers", 81: "Moderate rain showers", 82: "Violent rain showers",
+    85: "Slight snow showers", 86: "Heavy snow showers",
+    95: "Thunderstorm", 96: "Thunderstorm with slight hail", 99: "Thunderstorm with heavy hail",
+}
+
+HTML_PAGE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Weather Service</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 480px; margin: 60px auto; text-align: center; }
+    input { padding: 10px; width: 70%; font-size: 16px; }
+    button { padding: 10px 16px; font-size: 16px; cursor: pointer; }
+    #result { margin-top: 30px; font-size: 20px; }
+    .temp { font-size: 48px; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>🌤️ Weather Service</h1>
+  <p>Enter a city or place name to get the current weather in Celsius.</p>
+  <input type="text" id="city" placeholder="e.g. Gandimaisamma" />
+  <button onclick="getWeather()">Get Weather</button>
+  <div id="result"></div>
+
+  <script>
+    async function getWeather() {
+      const city = document.getElementById('city').value.trim();
+      const resultDiv = document.getElementById('result');
+      if (!city) {
+        resultDiv.innerHTML = "Please enter a place name.";
+        return;
+      }
+      resultDiv.innerHTML = "Loading...";
+      try {
+        const res = await fetch('/weather?city=' + encodeURIComponent(city));
+        const data = await res.json();
+        if (data.error) {
+          resultDiv.innerHTML = "Error: " + data.error;
+        } else {
+          resultDiv.innerHTML = `
+            <div class="temp">${data.temperature_celsius}°C</div>
+            <div>${data.description}</div>
+            <div>${data.location}</div>
+          `;
+        }
+      } catch (e) {
+        resultDiv.innerHTML = "Something went wrong. Please try again.";
+      }
     }
-    return movies.get(genre.lower(), "No movies found for that genre")
+  </script>
+</body>
+</html>
+"""
 
 
-@tool
-def change_to_f(temp_c: float) -> float:
-    """Converts the Celsius temperature to Fahrenheit temperature."""
-    return temp_c * 1.8 + 32
+def geocode_place(place_name):
+    """Convert a place name into latitude/longitude using Open-Meteo's geocoding API."""
+    params = {"name": place_name, "count": 1, "language": "en", "format": "json"}
+    resp = requests.get(GEOCODE_URL, params=params, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    results = data.get("results")
+    if not results:
+        return None
+    top = results[0]
+    return {
+        "latitude": top["latitude"],
+        "longitude": top["longitude"],
+        "name": top.get("name", place_name),
+        "admin1": top.get("admin1", ""),
+        "country": top.get("country", ""),
+    }
 
 
-@tool
-def get_weather(city: str) -> str:
-    """Get current temperature for a given city name."""
-    geo_url = "https://geocoding-api.open-meteo.com/v1/search"
-    geo_params = {"name": city, "count": 1}
+def get_current_weather(lat, lon):
+    """Fetch current weather (Celsius) for given coordinates."""
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "current_weather": "true",
+        "temperature_unit": "celsius",
+        "windspeed_unit": "kmh",
+    }
+    resp = requests.get(WEATHER_URL, params=params, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    return data.get("current_weather")
+
+
+@app.route("/")
+def home():
+    return render_template_string(HTML_PAGE)
+
+
+@app.route("/weather", methods=["GET"])
+def weather():
+    city = request.args.get("city", "").strip()
+    if not city:
+        return jsonify({"error": "Please provide a 'city' query parameter, e.g. /weather?city=Gandimaisamma"}), 400
+
     try:
-        geo_response = requests.get(geo_url, params=geo_params, timeout=10).json()
-        if "results" not in geo_response or not geo_response["results"]:
-            return f"Could not find weather data for city: {city}"
+        place = geocode_place(city)
+        if not place:
+            return jsonify({"error": f"Could not find location '{city}'. Try a nearby larger town."}), 404
 
-        location = geo_response["results"][0]
-        latitude = location["latitude"]
-        longitude = location["longitude"]
+        current = get_current_weather(place["latitude"], place["longitude"])
+        if not current:
+            return jsonify({"error": "Weather data unavailable for this location."}), 502
 
-        weather_url = "https://api.open-meteo.com/v1/forecast"
-        weather_params = {
-            "latitude": latitude,
-            "longitude": longitude,
-            "current": "temperature_2m,weather_code",
-            "temperature_unit": "celsius",
-        }
-        weather_response = requests.get(
-            weather_url, params=weather_params, timeout=10
-        ).json()["current"]
-        result = {
-            "resolved_city": location["name"],
-            "temperature_celsius": weather_response["temperature_2m"],
-            "weather_code": weather_response["weather_code"],
-        }
-        return json.dumps(result)
-    except Exception as e:
-        return f"Error fetching weather data: {str(e)}"
+        code = current.get("weathercode")
+        description = WEATHER_CODES.get(code, "Unknown conditions")
+
+        location_parts = [place["name"], place.get("admin1", ""), place.get("country", "")]
+        location_str = ", ".join([p for p in location_parts if p])
+
+        return jsonify({
+            "location": location_str,
+            "temperature_celsius": current.get("temperature"),
+            "windspeed_kmh": current.get("windspeed"),
+            "description": description,
+            "query": city,
+        })
+
+    except requests.exceptions.RequestException as e:
+        return jsonify({"error": f"Upstream weather service error: {str(e)}"}), 502
 
 
-tools = [get_weather, search_movies, change_to_f]
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok"})
 
-# --- 2. Initialize Model & Agent ---
-api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GOOGLE_APIKEY")
-if not api_key:
-    raise ValueError("Missing GOOGLE_API_KEY environment variable.")
-
-llm_flash = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash", google_api_key=api_key, temperature=0
-)
-
-prompt = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            "You are a specialized agent restricted ONLY to Indian weather and cinema. "
-            "For any other roles, topics, questions, or general knowledge outside of Indian weather and movies, "
-            "you must say exactly: 'I am not authorized to answer questions outside of Indian weather and cinema.'",
-        ),
-        MessagesPlaceholder(variable_name="messages"),
-        MessagesPlaceholder(variable_name="agent_scratchpad"),
-    ]
-)
-
-agent_runnable = create_tool_calling_agent(llm_flash, tools, prompt)
-agent = AgentExecutor(agent=agent_runnable, tools=tools)
-
-
-# --- 3. Custom Formatters & Chain Construction ---
-class AgentInput(BaseModel):
-    input: str = Field(description="Your message to the agent")
-
-
-def format_for_agent(x) -> dict:
-    user_input = x["input"] if isinstance(x, dict) else x.input
-    return {"messages": [("user", user_input)]}
-
-
-def extract_text_response(agent_output: dict) -> str:
-    if not isinstance(agent_output, dict):
-        return str(agent_output)
-
-    output = agent_output.get("output")
-    if output:
-        return str(output)
-
-    messages = agent_output.get("messages")
-    if messages:
-        last = messages[-1]
-        content = getattr(last, "content", last)
-        return str(content)
-
-    return str(agent_output)
-
-
-formatted_agent_chain = (
-    RunnableLambda(format_for_agent)
-    | agent
-    | RunnableLambda(extract_text_response)
-).with_types(input_type=AgentInput, output_type=str)
-
-# --- 4. FastAPI App ---
-app = FastAPI(title="Indian Weather & Cinema Agent")
-
-add_routes(app, formatted_agent_chain, path="/agent")
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    import os
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
