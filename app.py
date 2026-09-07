@@ -10,7 +10,13 @@ from langchain_core.tools import tool
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableLambda
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import AgentExecutor, create_tool_calling_agent
+
+# Safely import AgentExecutor and create_tool_calling_agent
+try:
+    from langchain.agents import AgentExecutor, create_tool_calling_agent
+except ImportError:
+    from langchain.agents.agent import AgentExecutor
+    from langchain.agents import create_tool_calling_agent
 
 # --- 1. Define Tools ---
 @tool
