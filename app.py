@@ -33,28 +33,31 @@ def get_weather(city: str) -> str:
     """Get current temperature for a given city name."""
     geo_url = "https://geocoding-api.open-meteo.com/v1/search"
     geo_params = {"name": city, "count": 1}
-    geo_response = requests.get(geo_url, params=geo_params).json()
-    if "results" not in geo_response:
-        return f"Could not find weather data for city: {city}"
-    
-    location = geo_response["results"][0]
-    latitude = location["latitude"]
-    longitude = location["longitude"]
-    
-    weather_url = "https://api.open-meteo.com/v1/forecast"
-    weather_params = {
-        "latitude": latitude,
-        "longitude": longitude,
-        "current": "temperature_2m,weather_code",
-        "temperature_unit": "celsius"
-    }
-    weather_response = requests.get(weather_url, params=weather_params).json()["current"]
-    result = {
-        "resolved_city": location["name"],
-        "temperature_celsius": weather_response["temperature_2m"],
-        "weather_code": weather_response["weather_code"]
-    }
-    return json.dumps(result)
+    try:
+        geo_response = requests.get(geo_url, params=geo_params, timeout=10).json()
+        if "results" not in geo_response or not geo_response["results"]:
+            return f"Could not find weather data for city: {city}"
+        
+        location = geo_response["results"][0]
+        latitude = location["latitude"]
+        longitude = location["longitude"]
+        
+        weather_url = "https://api.open-meteo.com/v1/forecast"
+        weather_params = {
+            "latitude": latitude,
+            "longitude": longitude,
+            "current": "temperature_2m,weather_code",
+            "temperature_unit": "celsius"
+        }
+        weather_response = requests.get(weather_url, params=weather_params, timeout=10).json()["current"]
+        result = {
+            "resolved_city": location["name"],
+            "temperature_celsius": weather_response["temperature_2m"],
+            "weather_code": weather_response["weather_code"]
+        }
+        return json.dumps(result)
+    except Exception as e:
+        return f"Error fetching weather data: {str(e)}"
 
 tools = [get_weather, search_movies, change__to_f]
 
@@ -63,7 +66,7 @@ api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GOOGLE_APIKEY")
 
 llm_flash = ChatGoogleGenerativeAI(
     model="gemini-1.5-flash",
-    api_key=api_key,
+    google_api_key=api_key,
     temperature=0
 )
 
