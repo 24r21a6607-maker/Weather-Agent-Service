@@ -10,8 +10,7 @@ from langchain_core.tools import tool
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableLambda
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-# --- 1. Define Tools ---
+from langchain.agents import AgentExecutor, create_tool_calling_agent# --- 1. Define Tools ---
 @tool
 def search_movies(genre: str) -> str:
     """Search for Indian movies by genre."""
